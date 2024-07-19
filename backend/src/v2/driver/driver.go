@@ -323,20 +323,35 @@ func Container(ctx context.Context, opts Options, mlmd *metadata.Client, cacheCl
 	// (2) CachedMLMDExecutionID is non-empty, which means a cache entry exists
 	cached := false
 	execution.Cached = &cached
-	if opts.Task.GetCachingOptions().GetEnableCache() && ecfg.CachedMLMDExecutionID != "" {
-		executorOutput, outputArtifacts, err := reuseCachedOutputs(ctx, execution.ExecutorInput, opts.Component.GetOutputDefinitions(), mlmd, ecfg.CachedMLMDExecutionID)
-		if err != nil {
-			return execution, err
+
+	glog.Infof("deciding whether to use cache for task %s ...", opts.Task.GetTaskInfo().GetName())
+	glog.Infof("cached MLMD execution ID = %s", ecfg.CachedMLMDExecutionID)
+	glog.Infof("fingerprint = %s", ecfg.FingerPrint)
+
+	if opts.Task.GetCachingOptions().GetEnableCache() {
+		glog.Infof("cache is enabled for this task, so we'll check if there is a cache entry")
+
+		if ecfg.CachedMLMDExecutionID != "" {
+			glog.Infof("cache hit. Getting cached output artifacts from MLMD")
+			executorOutput, outputArtifacts, err := reuseCachedOutputs(ctx, execution.ExecutorInput, opts.Component.GetOutputDefinitions(), mlmd, ecfg.CachedMLMDExecutionID)
+			if err != nil {
+				return execution, err
+			}
+			// TODO(Bobgy): upload output artifacts.
+			// TODO(Bobgy): when adding artifacts, we will need execution.pipeline to be non-nil, because we need
+			// to publish output artifacts to the context too.
+			glog.Infof("publishing a new execution with execution state = CACHED")
+			if err := mlmd.PublishExecution(ctx, createdExecution, executorOutput.GetParameterValues(), outputArtifacts, pb.Execution_CACHED); err != nil {
+				return execution, fmt.Errorf("failed to publish cached execution: %w", err)
+			}
+			glog.Infof("skipping podSpecPatch and exiting container driver")
+			*execution.Cached = true
+			return execution, nil
+		} else {
+			glog.Infof("cache miss. Preparing podSpecPatch for new execution")
 		}
-		// TODO(Bobgy): upload output artifacts.
-		// TODO(Bobgy): when adding artifacts, we will need execution.pipeline to be non-nil, because we need
-		// to publish output artifacts to the context too.
-		if err := mlmd.PublishExecution(ctx, createdExecution, executorOutput.GetParameterValues(), outputArtifacts, pb.Execution_CACHED); err != nil {
-			return execution, fmt.Errorf("failed to publish cached execution: %w", err)
-		}
-		glog.Infof("Use cache for task %s", opts.Task.GetTaskInfo().GetName())
-		*execution.Cached = true
-		return execution, nil
+	} else {
+		glog.Infof("cache is disabled for this task. Preparing podSpecPatch for new execution")
 	}
 
 	podSpec, err := initPodSpecPatch(opts.Container, opts.Component, executorInput, execution.ID, opts.PipelineName, opts.RunID, opts.MLPipelineTLSEnabled)
