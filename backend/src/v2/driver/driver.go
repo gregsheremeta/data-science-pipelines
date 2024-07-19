@@ -77,6 +77,9 @@ type Options struct {
 
 	// set to true if ml pipeline server is serving over tls
 	MLPipelineTLSEnabled bool
+
+	// set to true if execution caching is supported on this server, set to false to completely disable all caching
+	ExecutionCachingGloballySupported bool
 }
 
 // Identifying information used for error messages
@@ -103,6 +106,7 @@ func (o Options) info() string {
 	if o.KubernetesExecutorConfig != nil {
 		msg = msg + ", KubernetesExecutorConfig" // this only means KubernetesExecutorConfig is not empty
 	}
+	msg = msg + fmt.Sprintf(", ExecutionCachingGloballySupported=%v", o.ExecutionCachingGloballySupported)
 	return msg
 }
 
@@ -299,46 +303,106 @@ func Container(ctx context.Context, opts Options, mlmd *metadata.Client, cacheCl
 		return execution, kubernetesPlatformOps(ctx, mlmd, cacheClient, execution, ecfg, &opts)
 	}
 
-	// Generate fingerprint and MLMD ID for cache
-	fingerPrint, cachedMLMDExecutionID, err := getFingerPrintsAndID(execution, &opts, cacheClient)
-	if err != nil {
-		return execution, err
+	////////////////////
+	// execution caching
+	//
+	// here, driver makes a decision whether to use cache for this execution or not.
+	////////////////////
+
+	// TODO(greg): delete me
+	// true  => execution caching is supported
+	// false => execution caching is UNsupported (we won't even check the tasks/pipelines/runs' caching settings)
+	opts.ExecutionCachingGloballySupported = true
+	// end delete me
+
+	// will we even try to use cache for this task?
+	cachingEnabled := false
+
+	glog.Infof("deciding whether to try to use execution caching for task %s ...", opts.Task.GetTaskInfo().GetName())
+	if !opts.ExecutionCachingGloballySupported {
+		glog.Infof("execution caching is globally unsupported in this server. Not using cache for this or any task.")
+		cachingEnabled = false
+	} else if !opts.Task.GetCachingOptions().GetEnableCache() {
+		glog.Infof("execution caching is supported by this server, but is disabled for this task. Not using cache.")
+		cachingEnabled = false
+	} else {
+		glog.Infof("execution caching is supported by this server and enabled for this task. Will try to use cache.")
+		cachingEnabled = true
 	}
-	ecfg.CachedMLMDExecutionID = cachedMLMDExecutionID
-	ecfg.FingerPrint = fingerPrint
+
+	if cachingEnabled {
+		// Generate cache key hash (aka "fingerprint" in  MLMD)
+		cacheKeyHash, err := getFingerPrint(opts, execution.ExecutorInput)
+		if err != nil {
+			// caching is nice to have but not fatal. If something errors during caching,
+			// we should still continue with execution, so don't return.
+			glog.Errorf("failure while generating cache key hash: %w. Treated as a cache miss.", err)
+		}
+		ecfg.FingerPrint = cacheKeyHash
+		glog.Infof("generated cache key hash: %s", cacheKeyHash)
+
+		// using that hash, try to get a cached execution from MLMD
+		cachedMLMDExecutionID := ""
+		if cacheKeyHash != "" {
+			cachedMLMDExecutionID, err = cacheClient.GetExecutionCache(cacheKeyHash, "pipeline/"+opts.PipelineName, opts.Namespace)
+			if err != nil {
+				// caching is nice to have but not fatal. If something errors during caching,
+				// we should still continue with execution, so don't return.
+				glog.Errorf("failure while getting cached execution: %w. Treated as a cache miss.", err)
+			}
+		}
+
+		cacheHit := cachedMLMDExecutionID != ""
+		if cacheHit {
+			glog.Infof("cache hit. Attempting to reuse output artifacts from MLMD execution ID %s", cachedMLMDExecutionID)
+
+			executorOutput, outputArtifacts, err := reuseCachedOutputs(ctx, execution.ExecutorInput, opts.Component.GetOutputDefinitions(), mlmd, cachedMLMDExecutionID)
+			// caching is nice to have but not fatal. If something errors during caching,
+			// we should still continue with execution, so don't return.
+			if err == nil {
+				// TODO(Bobgy): upload output artifacts.
+				// TODO(Bobgy): when adding artifacts, we will need execution.pipeline to be non-nil, because we need
+				// to publish output artifacts to the context too.
+				glog.Infof("got output artifacts from cache. Creating and publishing a new execution with execution state = CACHED")
+				ecfg.CachedMLMDExecutionID = cachedMLMDExecutionID
+				createdExecution, err := mlmd.CreateExecution(ctx, pipeline, ecfg)
+				if err != nil {
+					return execution, fmt.Errorf("failed to create a new execution: %w", err)
+				}
+				glog.Infof("Created execution: %s", createdExecution)
+				execution.ID = createdExecution.GetID()
+
+				if err := mlmd.PublishExecution(ctx, createdExecution, executorOutput.GetParameterValues(), outputArtifacts, pb.Execution_CACHED); err != nil {
+					return execution, fmt.Errorf("failed to publish cached execution: %w", err)
+				}
+				glog.Infof("skipping podSpecPatch and exiting container driver")
+				_t := true
+				execution.Cached = &_t
+				return execution, nil
+			} else {
+				glog.Errorf("failure while getting cached artifacts (treated as a cache miss). Error: %w", err)
+			}
+		} else {
+			glog.Errorf("cache miss")
+		}
+	}
 
 	// TODO(Bobgy): change execution state to pending, because this is driver, execution hasn't started.
+
+	// if we're still in here, we did not use cache. Continue with new task.
 	createdExecution, err := mlmd.CreateExecution(ctx, pipeline, ecfg)
 	if err != nil {
 		return execution, err
 	}
 	glog.Infof("Created execution: %s", createdExecution)
 	execution.ID = createdExecution.GetID()
+	_f := false
+	execution.Cached = &_f
 	if !execution.WillTrigger() {
 		return execution, nil
 	}
 
-	// Use cache and skip launcher if all contions met:
-	// (1) Cache is enabled
-	// (2) CachedMLMDExecutionID is non-empty, which means a cache entry exists
-	cached := false
-	execution.Cached = &cached
-	if opts.Task.GetCachingOptions().GetEnableCache() && ecfg.CachedMLMDExecutionID != "" {
-		executorOutput, outputArtifacts, err := reuseCachedOutputs(ctx, execution.ExecutorInput, opts.Component.GetOutputDefinitions(), mlmd, ecfg.CachedMLMDExecutionID)
-		if err != nil {
-			return execution, err
-		}
-		// TODO(Bobgy): upload output artifacts.
-		// TODO(Bobgy): when adding artifacts, we will need execution.pipeline to be non-nil, because we need
-		// to publish output artifacts to the context too.
-		if err := mlmd.PublishExecution(ctx, createdExecution, executorOutput.GetParameterValues(), outputArtifacts, pb.Execution_CACHED); err != nil {
-			return execution, fmt.Errorf("failed to publish cached execution: %w", err)
-		}
-		glog.Infof("Use cache for task %s", opts.Task.GetTaskInfo().GetName())
-		*execution.Cached = true
-		return execution, nil
-	}
-
+	glog.Infof("Preparing podSpecPatch for new task")
 	podSpec, err := initPodSpecPatch(opts.Container, opts.Component, executorInput, execution.ID, opts.PipelineName, opts.RunID, opts.MLPipelineTLSEnabled)
 	if err != nil {
 		return execution, err
