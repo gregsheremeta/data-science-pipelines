@@ -152,7 +152,7 @@ func TestGenerateCacheKey(t *testing.T) {
 	}
 }
 
-func TestGenerateFingerPrint(t *testing.T) {
+func TestGenerateCacheKeyHash(t *testing.T) {
 	cacheKey := &cachekey.CacheKey{
 		InputArtifactNames: map[string]*cachekey.ArtifactNameList{
 			"dataset_one": {ArtifactNames: []string{"1"}},
@@ -255,9 +255,9 @@ func TestGenerateFingerPrint(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			fingerPrint, err := GenerateFingerPrint(cacheKey)
+			fingerPrint, err := GenerateCacheKeyHash(cacheKey)
 			assert.Nil(t, err)
-			testFingerPrint, err := GenerateFingerPrint(test.cacheKey)
+			testFingerPrint, err := GenerateCacheKeyHash(test.cacheKey)
 			assert.Nil(t, err)
 			assert.Equal(t, fingerPrint == testFingerPrint, test.wantEqual)
 			assert.Equal(t, test.fingerPrint, testFingerPrint)

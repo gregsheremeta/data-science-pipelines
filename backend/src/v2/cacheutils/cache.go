@@ -7,9 +7,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
+
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
-	"os"
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -29,7 +30,7 @@ const (
 	defaultKfpApiEndpoint = "ml-pipeline.kubeflow:8887"
 )
 
-func GenerateFingerPrint(cacheKey *cachekey.CacheKey) (string, error) {
+func GenerateCacheKeyHash(cacheKey *cachekey.CacheKey) (string, error) {
 	cacheKeyJsonBytes, err := protojson.Marshal(cacheKey)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal cache key with protojson: %w", err)
@@ -154,7 +155,7 @@ func cacheDefaultEndpoint() string {
 	return defaultKfpApiEndpoint
 }
 
-func (c *Client) GetExecutionCache(fingerPrint, pipelineName, namespace string) (string, error) {
+func (c *Client) GetCachedExecution(fingerPrint, pipelineName, namespace string) (string, error) {
 	fingerPrintPredicate := &api.Predicate{
 		Op:    api.Predicate_EQUALS,
 		Key:   "fingerprint",
