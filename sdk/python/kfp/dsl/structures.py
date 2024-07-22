@@ -408,7 +408,7 @@ class TaskSpec:
         iterator_item_input (optional): the name of the input which has the item
             from the [items][] collection.
         enable_caching (optional): whether or not to enable caching for the task.
-            Default is True.
+            Default is False.
         display_name (optional): the display name of the task. If not specified,
             the task name will be used as the display name.
     """
@@ -420,7 +420,7 @@ class TaskSpec:
     trigger_strategy: Optional[str] = None
     iterator_items: Optional[Any] = None
     iterator_item_input: Optional[str] = None
-    enable_caching: bool = True
+    enable_caching: bool = False
     display_name: Optional[str] = None
     retry_policy: Optional[RetryPolicy] = None
 

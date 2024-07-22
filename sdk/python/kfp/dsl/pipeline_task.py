@@ -130,7 +130,7 @@ class PipelineTask:
             inputs=dict(args.items()),
             dependent_tasks=[],
             component_ref=component_spec.name,
-            enable_caching=True)
+            enable_caching=False)
         self._run_after: List[str] = []
 
         self.importer_spec = None
