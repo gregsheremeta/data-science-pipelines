@@ -348,7 +348,7 @@ func Container(ctx context.Context, opts Options, mlmd *metadata.Client, cacheCl
 		if err != nil {
 			return execution, err
 		}
-		err = extendPodSpecPatch(podSpec, opts.KubernetesExecutorConfig, dag, dagTasks)
+		err = extendPodSpecPatch(podSpec, opts.KubernetesExecutorConfig, dag, dagTasks, inputs)
 		if err != nil {
 			return execution, err
 		}
@@ -480,6 +480,7 @@ func extendPodSpecPatch(
 	kubernetesExecutorConfig *kubernetesplatform.KubernetesExecutorConfig,
 	dag *metadata.DAG,
 	dagTasks map[string]*metadata.Execution,
+	inputs *pipelinespec.ExecutorInput_Inputs,
 ) error {
 	// Return an error if the podSpec has no user container.
 	if len(podSpec.Containers) == 0 {
@@ -544,14 +545,49 @@ func extendPodSpecPatch(
 	// Get secret mount information
 	for _, secretAsVolume := range kubernetesExecutorConfig.GetSecretAsVolume() {
 		optional := secretAsVolume.Optional != nil && *secretAsVolume.Optional
+
+		// read the secret name passed in. If it has brackets, it is dynamic, and we need to check the map for the runtime value.
+		// if there are no brackets, it IS the name of the secret to mount -- just use it.
+
+		secretName := secretAsVolume.GetSecretName()
+		if strings.HasPrefix(secretName, "{{") {
+			fmt.Printf("WOOHOO we found the braces!!\n")
+			// it looks like this in the protobuf:
+			// secretName: '{{my_secret}}'
+			// remove the braces
+			key := secretName[2 : len(secretName)-2]
+
+			fmt.Printf("extracted key: %s\n", key)
+
+			// get the value from the map
+			// val := inputs.ParameterValues[key]
+			// fmt.Printf("inputs : %v\n", inputs)
+			// fmt.Printf("inputs.ParameterValues : %v\n", inputs.ParameterValues)
+			// fmt.Printf("extracted value: %s\n", val)
+			// strVal := val.GetStringValue()
+
+			inputParams, _, err := dag.Execution.GetParameters()
+			if err != nil {
+				return err
+			}
+
+			fmt.Printf("inputParams : %v\n", inputParams)
+			val := inputParams[key]
+			strVal := val.GetStringValue()
+			secretName = strVal
+			fmt.Printf("extracted secretName from inputParams: %s\n", secretName)
+		} else {
+			fmt.Printf("no braces\n")
+		}
+
 		secretVolume := k8score.Volume{
-			Name: secretAsVolume.GetSecretName(),
+			Name: secretName,
 			VolumeSource: k8score.VolumeSource{
-				Secret: &k8score.SecretVolumeSource{SecretName: secretAsVolume.GetSecretName(), Optional: &optional},
+				Secret: &k8score.SecretVolumeSource{SecretName: secretName, Optional: &optional},
 			},
 		}
 		secretVolumeMount := k8score.VolumeMount{
-			Name:      secretAsVolume.GetSecretName(),
+			Name:      secretName,
 			MountPath: secretAsVolume.GetMountPath(),
 		}
 		podSpec.Volumes = append(podSpec.Volumes, secretVolume)
