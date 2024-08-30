@@ -1095,5 +1095,9 @@ message PlatformDeploymentConfig {
 
 // Spec for pipeline-level config options. See PipelineConfig DSL class.
 message PipelineConfig {
-  // TODO add pipeline-level configs
+  // Limit the parallel execution of pipelines that reference this semaphore.
+  string semaphore_name = 1;
+
+  // Prevent the simultaneous execution of pipelines that reference this mutex.
+  string mutex_name = 2;
 }

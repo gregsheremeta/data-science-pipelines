@@ -119,6 +119,26 @@ func Compile(jobArg *pipelinespec.PipelineJob, kubernetesSpecArg *pipelinespec.S
 			Entrypoint:         tmplEntrypoint,
 		},
 	}
+
+	// TODO: get the semaphoreName from the PipelineConfig spec. TBD where it will live.
+	// maybe from something like this:
+	//     pipelineConfigSpec := spec.GetPipelineConfig()
+	// For purposes of this proof of concept, hardcode it.
+	semaphoreName := "my-test-semaphore"
+
+	if semaphoreName != "" {
+		wf.Spec.Synchronization = &wfapi.Synchronization{
+			Semaphore: &wfapi.SemaphoreRef{
+				ConfigMapKeyRef: &k8score.ConfigMapKeySelector{
+					LocalObjectReference: k8score.LocalObjectReference{
+						Name: semaphoreName,
+					},
+					Key: "semaphore",
+				},
+			},
+		}
+	}
+
 	c := &workflowCompiler{
 		wf:        wf,
 		templates: make(map[string]*wfapi.Template),

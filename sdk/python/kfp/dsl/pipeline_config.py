@@ -18,6 +18,13 @@ class PipelineConfig:
     """PipelineConfig contains pipeline-level config options."""
 
     def __init__(self):
-        pass
+        self.semaphore_name = None
 
-    # TODO add pipeline level configs
+    def set_semaphore_name(self, semaphore_name: str):
+        """Limit the parallel execution of pipelines that reference this semaphore.
+        Args:
+          semaphore_name: Name of the semaphore. In Argo Workflows, this is the name of a
+          ConfigMap that defines the semaphore.
+        """
+        self.semaphore_name = semaphore_name
+        return self
